@@ -10,11 +10,13 @@ from pypdf import PdfReader
 
 app = FastAPI(title="ResumeIQ API", version="2.0.0")
 
+# Allow the local development frontend and deployed Vercel frontend.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://resume-iq-nu-sooty.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -119,7 +121,10 @@ def extract_text(filename: str, content: bytes) -> str:
     except Exception as exc:
         raise HTTPException(
             status_code=400,
-            detail="Could not read this resume. Please try another PDF or DOCX file.",
+            detail=(
+                "Could not read this resume. "
+                "Please try another PDF or DOCX file."
+            ),
         ) from exc
 
     raise HTTPException(
@@ -135,26 +140,40 @@ def contains_term(text: str, term: str) -> bool:
 
 
 def analyze_text(text: str, job_role: str) -> dict:
+    """Analyze resume text using transparent, rule-based checks."""
     word_count = len(re.findall(r"\b[\w+#./-]+\b", text))
+
     email_found = bool(
-        re.search(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
-                  text, re.IGNORECASE)
-    )
-    phone_found = bool(
-        re.search(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)", text)
-    )
-    date_found = bool(
         re.search(
-            r"\b(?:19|20)\d{2}\b|"
-            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-            r"[a-z]*\.?\s+\d{4}\b",
+            r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
             text,
             re.IGNORECASE,
         )
     )
+
+    phone_found = bool(
+        re.search(
+            r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)",
+            text,
+        )
+    )
+
+    date_found = bool(
+        re.search(
+            r"\b(?:19|20)\d{2}\b|"
+            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+            r"[a-z]?\.?\s+\d{4}\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
     quantified_achievement = bool(
-        re.search(r"\b\d+\s*(?:%|percent|users|customers|projects|hours)\b",
-                  text, re.IGNORECASE)
+        re.search(
+            r"\b\d+\s*(?:%|percent|users|customers|projects|hours)\b",
+            text,
+            re.IGNORECASE,
+        )
     )
 
     found_skills = [
@@ -162,16 +181,25 @@ def analyze_text(text: str, job_role: str) -> dict:
     ]
 
     section_keywords = {
-        "Education": ["education", "academic background", "qualification"],
-        "Skills": ["skills", "technical skills", "core competencies"],
-        "Projects": ["projects", "personal projects", "academic projects"],
+        "Education": [
+            "education", "academic background", "qualification"
+        ],
+        "Skills": [
+            "skills", "technical skills", "core competencies"
+        ],
+        "Projects": [
+            "projects", "personal projects", "academic projects"
+        ],
         "Experience": [
             "experience", "work experience", "internship", "employment"
         ],
-        "Certifications": ["certifications", "certificates", "courses"],
+        "Certifications": [
+            "certifications", "certificates", "courses"
+        ],
     }
 
     lowered_text = text.lower()
+
     sections_found = [
         section
         for section, keywords in section_keywords.items()
@@ -179,24 +207,27 @@ def analyze_text(text: str, job_role: str) -> dict:
     ]
 
     missing_sections = [
-        section for section in section_keywords
+        section
+        for section in section_keywords
         if section not in sections_found
     ]
 
-    # Resume Quality Score: a checklist, not a hiring prediction.
+    # Resume quality checklist, not a hiring prediction.
     quality_score = 0
-    quality_score += len(sections_found) * 7       # Up to 35
+    quality_score += len(sections_found) * 7
     quality_score += min(len(found_skills) * 2, 25)
     quality_score += 10 if email_found else 0
     quality_score += 5 if phone_found else 0
-    quality_score += 10 if 100 <= word_count <= 1000 else (
-        5 if word_count > 0 else 0
+    quality_score += (
+        10 if 100 <= word_count <= 1000
+        else 5 if word_count > 0
+        else 0
     )
     quality_score += 5 if date_found else 0
     quality_score += 10 if quantified_achievement else 0
     quality_score = min(quality_score, 100)
 
-    # Match skills against the selected role.
+    # Compare detected skills against the requested role.
     normalized_role = job_role.strip().lower()
     expected_skills = ROLE_SKILLS.get(normalized_role, [])
 
@@ -205,10 +236,12 @@ def analyze_text(text: str, job_role: str) -> dict:
             skill for skill in expected_skills
             if skill in found_skills
         ]
+
         missing_role_skills = [
             skill for skill in expected_skills
             if skill not in matched_role_skills
         ]
+
         skill_match_score = round(
             len(matched_role_skills) / len(expected_skills) * 100
         )
@@ -237,10 +270,14 @@ def analyze_text(text: str, job_role: str) -> dict:
     if "Education" in sections_found:
         strengths.append("An Education section was detected.")
     else:
-        improvements.append("Add a clearly labelled Education section.")
+        improvements.append(
+            "Add a clearly labelled Education section."
+        )
 
     if "Skills" in sections_found and found_skills:
-        strengths.append("A Skills section and technical skills were detected.")
+        strengths.append(
+            "A Skills section and technical skills were detected."
+        )
     elif not found_skills:
         improvements.append(
             "Add relevant technical skills that you actually know."
@@ -254,10 +291,13 @@ def analyze_text(text: str, job_role: str) -> dict:
         )
 
     if "Experience" in sections_found:
-        strengths.append("An Experience or internship section was detected.")
+        strengths.append(
+            "An Experience or internship section was detected."
+        )
     else:
         improvements.append(
-            "If applicable, add internships, work experience, or practical experience."
+            "If applicable, add internships, work experience, "
+            "or practical experience."
         )
 
     if not quantified_achievement:
@@ -274,7 +314,8 @@ def analyze_text(text: str, job_role: str) -> dict:
 
     if word_count < 100:
         improvements.append(
-            "The extracted resume text is short. Check that the file contains all pages."
+            "The extracted resume text is short. "
+            "Check that the file contains all pages."
         )
 
     return {
@@ -344,7 +385,10 @@ async def analyze_resume(
     if not text.strip():
         raise HTTPException(
             status_code=400,
-            detail="No readable text found. Try a text-based PDF or DOCX file.",
+            detail=(
+                "No readable text found. "
+                "Try a text-based PDF or DOCX file."
+            ),
         )
 
     return analyze_text(text, job_role)
