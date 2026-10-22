@@ -1,19 +1,19 @@
+
 import re
 from io import BytesIO
 
+from docx import Document
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from docx import Document
 from pypdf import PdfReader
 
 
 app = FastAPI(
     title="ResumeIQ API",
     description="Resume quality checks and job-role skill matching",
-    version="3.0.0",
+    version="4.0.0",
 )
 
-# Keep the existing deployed frontend and local development origins.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -29,13 +29,14 @@ app.add_middleware(
 MAX_FILE_SIZE = 5 * 1024 * 1024
 MAX_PDF_PAGES = 50
 
-# Canonical skill names and commonly used resume variations.
+
+# Canonical skill names and common aliases.
 SKILL_ALIASES = {
     "Python": ["python"],
     "Java": ["java"],
     "JavaScript": ["javascript", "java script"],
     "TypeScript": ["typescript", "type script"],
-    "React": ["react", "react.js", "reactjs"],
+    "React": ["react.js", "reactjs", "react"],
     "Node.js": ["node.js", "nodejs", "node js"],
     "Express.js": ["express.js", "expressjs", "express js"],
     "SQL": ["sql"],
@@ -45,23 +46,28 @@ SKILL_ALIASES = {
     "FastAPI": ["fastapi", "fast api"],
     "Django": ["django"],
     "Flask": ["flask"],
-    "REST API": ["rest api", "restful api", "rest apis"],
+    "REST API": ["restful api", "rest apis", "rest api"],
     "GraphQL": ["graphql"],
     "HTML": ["html"],
     "CSS": ["css"],
     "Tailwind CSS": ["tailwind css", "tailwind"],
     "Bootstrap": ["bootstrap"],
-    "AWS": ["aws", "amazon web services"],
+    "AWS": ["amazon web services", "aws"],
     "Azure": ["microsoft azure", "azure"],
     "Google Cloud": ["google cloud", "gcp"],
     "Docker": ["docker"],
     "Kubernetes": ["kubernetes", "k8s"],
     "Jenkins": ["jenkins"],
     "GitHub Actions": ["github actions"],
-    "GitLab CI/CD": ["gitlab ci", "gitlab ci/cd"],
-    "CI/CD": ["ci/cd", "continuous integration", "continuous delivery"],
+    "GitLab CI/CD": ["gitlab ci/cd", "gitlab ci"],
+    "CI/CD": [
+        "continuous integration",
+        "continuous delivery",
+        "continuous deployment",
+        "ci/cd",
+    ],
     "Linux": ["linux"],
-    "Bash": ["bash", "shell scripting"],
+    "Bash": ["shell scripting", "bash"],
     "Git": ["git"],
     "GitHub": ["github"],
     "Terraform": ["terraform"],
@@ -87,7 +93,8 @@ SKILL_ALIASES = {
     "Communication": ["communication"],
 }
 
-# Skills used for each supported target role.
+
+# Required skills for supported roles.
 ROLE_SKILLS = {
     "python developer": [
         "Python", "FastAPI", "Django", "SQL", "Git",
@@ -136,19 +143,65 @@ ROLE_SKILLS = {
 }
 
 
+ROLE_ALIASES = {
+    "front end developer": "frontend developer",
+    "front-end developer": "frontend developer",
+    "fullstack developer": "full stack developer",
+    "back end developer": "backend developer",
+    "back-end developer": "backend developer",
+    "ai automation": "ai automation engineer",
+}
+
+
+SECTION_PATTERNS = {
+    "Education": [
+        r"education",
+        r"academic background",
+        r"educational qualifications?",
+        r"qualifications?",
+    ],
+    "Skills": [
+        r"skills",
+        r"technical skills",
+        r"core competencies",
+        r"key skills",
+        r"technologies",
+    ],
+    "Projects": [
+        r"projects",
+        r"personal projects",
+        r"academic projects",
+        r"project experience",
+    ],
+    "Experience": [
+        r"experience",
+        r"work experience",
+        r"professional experience",
+        r"internships?",
+        r"employment history",
+    ],
+    "Certifications": [
+        r"certifications?",
+        r"certificates",
+        r"courses",
+        r"licenses",
+    ],
+}
+
+
 def normalize_text(text: str) -> str:
-    """Normalize whitespace and case for reliable matching."""
+    """Normalize whitespace and case."""
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
 def contains_term(text: str, term: str) -> bool:
-    """Match a complete term instead of an unrelated substring."""
+    """Match whole terms instead of unrelated substrings."""
     pattern = r"(?<!\w)" + re.escape(term) + r"(?!\w)"
     return re.search(pattern, text, re.IGNORECASE) is not None
 
 
 def extract_text(filename: str, content: bytes) -> str:
-    """Extract readable text from PDF or DOCX resumes."""
+    """Extract text from text-based PDF or DOCX files."""
     extension = filename.lower().rsplit(".", 1)[-1]
 
     try:
@@ -189,6 +242,7 @@ def extract_text(filename: str, content: bytes) -> str:
 
         if extension == "docx":
             document = Document(BytesIO(content))
+
             parts = [
                 paragraph.text
                 for paragraph in document.paragraphs
@@ -210,69 +264,33 @@ def extract_text(filename: str, content: bytes) -> str:
             status_code=400,
             detail=(
                 "Could not read this resume. "
-                "Please upload a valid text-based PDF or DOCX."
+                "Upload a valid text-based PDF or DOCX."
             ),
         ) from exc
 
     raise HTTPException(
         status_code=400,
-        detail="Unsupported file type. Upload a PDF or DOCX file.",
+        detail="Unsupported file type. Upload a PDF or DOCX resume.",
     )
 
 
 def detect_skills(text: str) -> list[str]:
-    """Return canonical skill names detected in resume text."""
-    found = []
+    """Detect unique skills using canonical names."""
     normalized = normalize_text(text)
+    found = []
 
     for canonical_name, aliases in SKILL_ALIASES.items():
-        for alias in aliases:
-            if contains_term(normalized, alias):
-                found.append(canonical_name)
-                break
+        if any(
+            contains_term(normalized, alias)
+            for alias in aliases
+        ):
+            found.append(canonical_name)
 
     return found
 
 
 def detect_sections(text: str) -> list[str]:
-    """Detect common resume sections from their headings."""
-    section_patterns = {
-        "Education": [
-            r"education",
-            r"academic background",
-            r"educational qualifications?",
-            r"qualifications?",
-        ],
-        "Skills": [
-            r"skills",
-            r"technical skills",
-            r"core competencies",
-            r"key skills",
-            r"technologies",
-        ],
-        "Projects": [
-            r"projects",
-            r"personal projects",
-            r"academic projects",
-            r"project experience",
-        ],
-        "Experience": [
-            r"experience",
-            r"work experience",
-            r"professional experience",
-            r"internships?",
-            r"employment history",
-        ],
-        "Certifications": [
-            r"certifications?",
-            r"certificates",
-            r"courses",
-            r"licenses",
-        ],
-    }
-
-    # Match headings line by line to reduce accidental matches
-    # inside ordinary sentences.
+    """Detect common section headings line by line."""
     lines = [
         re.sub(r"\s+", " ", line).strip().lower()
         for line in text.splitlines()
@@ -281,19 +299,17 @@ def detect_sections(text: str) -> list[str]:
 
     found = []
 
-    for section, patterns in section_patterns.items():
+    for section, patterns in SECTION_PATTERNS.items():
         for line in lines:
-            cleaned_line = re.sub(r"^[\W_]+|[\W_]+$", "", line)
+            cleaned = re.sub(r"^[\W_]+|[\W_]+$", "", line)
 
-            # Headings may include a short suffix, such as a colon
-            # or a count, but should not be full paragraphs.
-            if len(cleaned_line) > 90:
+            if len(cleaned) > 90:
                 continue
 
             if any(
-                re.match(
-                    r"^\s*" + pattern + r"(?:\s*[:|\-–—]?\s*)$",
-                    cleaned_line,
+                re.fullmatch(
+                    pattern + r"\s*[:\-–—]?",
+                    cleaned,
                     re.IGNORECASE,
                 )
                 for pattern in patterns
@@ -305,9 +321,11 @@ def detect_sections(text: str) -> list[str]:
 
 
 def analyze_text(text: str, job_role: str) -> dict:
-    """Analyze resume quality and match skills to a known role."""
+    """Calculate a transparent resume-quality estimate."""
+
+    # 1. Basic information
     word_count = len(re.findall(r"\b[\w+#./-]+\b", text))
-    normalized_text = normalize_text(text)
+    normalized = normalize_text(text)
 
     email_found = bool(
         re.search(
@@ -317,7 +335,6 @@ def analyze_text(text: str, job_role: str) -> dict:
         )
     )
 
-    # Check for a plausible phone number with 8 to 15 digits.
     phone_found = any(
         8 <= len(re.sub(r"\D", "", match)) <= 15
         for match in re.findall(
@@ -339,13 +356,14 @@ def analyze_text(text: str, job_role: str) -> dict:
     quantified_achievement = bool(
         re.search(
             r"\b\d+(?:\.\d+)?\s*"
-            r"(?:%|percent|users|customers|projects|hours|"
-            r"days|weeks|months|years|requests|seconds)\b",
+            r"(?:%|percent|users|customers|projects|hours|days|"
+            r"weeks|months|years|requests|seconds|minutes)\b",
             text,
             re.IGNORECASE,
         )
     )
 
+    # 2. Skills and sections
     found_skills = detect_skills(text)
     sections_found = detect_sections(text)
 
@@ -363,109 +381,141 @@ def analyze_text(text: str, job_role: str) -> dict:
         if section not in sections_found
     ]
 
-    # Transparent resume-quality checklist, not a hiring prediction.
-    score_breakdown = {
-        "sections": min(len(sections_found) * 7, 35),
-        "skills": min(len(found_skills) * 2, 25),
-        "email": 10 if email_found else 0,
-        "phone": 5 if phone_found else 0,
-        "length": (
-            10 if 100 <= word_count <= 1000
-            else 5 if word_count > 0
-            else 0
-        ),
-        "dates": 5 if date_found else 0,
-        "measurable_achievements": (
-            10 if quantified_achievement else 0
-        ),
-    }
-
-    quality_score = min(sum(score_breakdown.values()), 100)
-
-    # Normalize common role-name variations.
+    # 3. Role normalization
     normalized_role = normalize_text(job_role)
-    role_aliases = {
-        "frontend developer": "frontend developer",
-        "front end developer": "frontend developer",
-        "front-end developer": "frontend developer",
-        "devops engineer": "devops engineer",
-        "devops": "devops",
-        "cloud engineer": "cloud engineer",
-        "fullstack developer": "full stack developer",
-        "full stack developer": "full stack developer",
-        "ai automation": "ai automation engineer",
-        "ai automation engineer": "ai automation engineer",
-        "automation engineer": "automation engineer",
-        "backend developer": "backend developer",
-        "back end developer": "backend developer",
-        "python developer": "python developer",
-        "data analyst": "data analyst",
-        "machine learning engineer": "machine learning engineer",
-    }
-
-    role_key = role_aliases.get(
+    role_key = ROLE_ALIASES.get(
         normalized_role,
         normalized_role,
     )
+
     expected_skills = ROLE_SKILLS.get(role_key, [])
 
     matched_role_skills = [
-        skill for skill in expected_skills
+        skill
+        for skill in expected_skills
         if skill in found_skills
     ]
+
     missing_role_skills = [
-        skill for skill in expected_skills
+        skill
+        for skill in expected_skills
         if skill not in matched_role_skills
     ]
 
     if expected_skills:
         skill_match_score = round(
-            len(matched_role_skills)
-            / len(expected_skills)
-            * 100
+            len(matched_role_skills) / len(expected_skills) * 100
+        )
+        skill_quality_points = round(
+            skill_match_score * 0.20
         )
     else:
+        # Unsupported roles must not receive a fabricated role-match score.
         skill_match_score = None
+        skill_quality_points = min(len(found_skills) * 2, 20)
 
+    # 4. Look for evidence of project and experience details.
+    project_action_found = bool(
+        re.search(
+            r"\b(built|developed|created|deployed|implemented|"
+            r"designed|automated|configured|integrated|maintained)\b",
+            normalized,
+        )
+    )
+
+    experience_action_found = bool(
+        re.search(
+            r"\b(worked|managed|delivered|supported|resolved|"
+            r"collaborated|optimized|implemented|deployed|maintained)\b",
+            normalized,
+        )
+    )
+
+    project_points = (
+        10
+        if "Projects" in sections_found and project_action_found
+        else 5
+        if "Projects" in sections_found
+        else 0
+    )
+
+    experience_points = (
+        10
+        if "Experience" in sections_found and experience_action_found
+        else 5
+        if "Experience" in sections_found
+        else 0
+    )
+
+    # 5. Resume quality score (maximum 100 points).
+    # This is a heuristic, not a standardized ATS score.
+    section_points = min(len(sections_found) * 5, 25)
+
+    contact_points = (
+        (5 if email_found else 0)
+        + (5 if phone_found else 0)
+    )
+
+    if 150 <= word_count <= 800:
+        length_points = 10
+    elif 100 <= word_count < 150 or 801 <= word_count <= 1000:
+        length_points = 6
+    elif word_count > 0:
+        length_points = 2
+    else:
+        length_points = 0
+
+    date_points = 5 if date_found else 0
+    achievement_points = 10 if quantified_achievement else 0
+
+    score_breakdown = {
+        "sections": section_points,  # max 25
+        "skills": skill_quality_points,  # max 20
+        "email": 5 if email_found else 0,
+        "phone": 5 if phone_found else 0,
+        "length": length_points,  # max 10
+        "dates": date_points,  # max 5
+        "measurable_achievements": achievement_points,  # max 10
+        "project_details": project_points,  # max 10
+        "experience_details": experience_points,  # max 10
+    }
+
+    quality_score = min(sum(score_breakdown.values()), 100)
+
+    # 6. Strengths and improvements
     strengths = []
     improvements = []
 
     if email_found:
         strengths.append("An email address was detected.")
     else:
-        improvements.append(
-            "Add a professional email address to your resume."
-        )
+        improvements.append("Add a professional email address.")
 
     if phone_found:
         strengths.append("A possible contact phone number was detected.")
     else:
-        improvements.append(
-            "Consider adding a contact phone number."
-        )
+        improvements.append("Consider adding a contact phone number.")
 
     if "Education" in sections_found:
         strengths.append("An Education section was detected.")
     else:
-        improvements.append(
-            "Add a clearly labelled Education section."
-        )
+        improvements.append("Add a clearly labelled Education section.")
 
     if "Skills" in sections_found and found_skills:
         strengths.append(
             "A Skills section and technical skills were detected."
         )
-    elif not found_skills:
-        improvements.append(
-            "Add relevant technical skills that you actually know."
-        )
     else:
         improvements.append(
-            "Add a clearly labelled Skills section."
+            "Add a clearly labelled Skills section with relevant skills."
         )
 
     if "Projects" in sections_found:
         strengths.append("A Projects section was detected.")
+        if not project_action_found:
+            improvements.append(
+                "Explain what you built, the tools used, and your contribution."
+            )
     else:
         improvements.append(
             "Add relevant projects and explain your contribution."
@@ -475,10 +525,13 @@ def analyze_text(text: str, job_role: str) -> dict:
         strengths.append(
             "An Experience or internship section was detected."
         )
+        if not experience_action_found:
+            improvements.append(
+                "Explain your responsibilities and practical work."
+            )
     else:
         improvements.append(
-            "If applicable, add internships, work experience, "
-            "or practical experience."
+            "If applicable, include internships or practical experience."
         )
 
     if "Certifications" not in sections_found:
@@ -488,43 +541,38 @@ def analyze_text(text: str, job_role: str) -> dict:
 
     if not date_found:
         improvements.append(
-            "Include relevant dates for education, projects, "
-            "certifications, or experience."
+            "Include dates for education, projects, courses, or experience."
         )
 
     if not quantified_achievement:
         improvements.append(
-            "Where accurate, include measurable project outcomes "
-            "or results."
+            "Where accurate, add measurable project outcomes or results."
         )
 
     if expected_skills and missing_role_skills:
         improvements.append(
-            "For your target role, consider demonstrating these skills: "
+            "Consider demonstrating these target-role skills if you know them: "
             + ", ".join(missing_role_skills)
-            + ". Only list skills you genuinely know."
+            + "."
         )
 
     if word_count < 100:
         improvements.append(
-            "The extracted text is short. Check that your resume "
-            "contains all pages and selectable text."
+            "Very little text was extracted. Check PDF text extraction "
+            "and whether all pages were read."
         )
-
-    if word_count > 1000:
+    elif word_count > 1000:
         improvements.append(
-            "Consider removing repetitive content and keeping "
-            "the resume concise and relevant."
+            "Consider removing repetitive content and keeping the resume concise."
         )
 
     if not improvements:
         improvements.append(
-            "Keep your resume updated with relevant, accurate "
-            "skills and project outcomes."
+            "Keep your resume accurate and update it with relevant evidence."
         )
 
+    # 7. Preserve the response fields expected by the existing frontend.
     return {
-        # Preserve the fields expected by the current frontend.
         "score": quality_score,
         "quality_score": quality_score,
         "skill_match_score": skill_match_score,
@@ -540,10 +588,9 @@ def analyze_text(text: str, job_role: str) -> dict:
         "missing_role_skills": missing_role_skills,
         "note": (
             "Scores are rule-based guidance, not an official ATS score "
-            "or a prediction of hiring success. Results depend on the "
-            "text extracted from your resume and the supported skill list."
+            "or a prediction of hiring success. Skill matching checks "
+            "only the configured skills for the selected role."
         ),
-        # Additional optional data for future improvements.
         "score_breakdown": score_breakdown,
         "email_detected": email_found,
         "phone_detected": phone_found,
@@ -590,7 +637,7 @@ async def analyze_resume(
         )
 
     try:
-        # Read only up to the allowed limit plus one byte.
+        # Read only the maximum allowed size plus one byte.
         content = await file.read(MAX_FILE_SIZE + 1)
     finally:
         await file.close()
@@ -613,8 +660,8 @@ async def analyze_resume(
         raise HTTPException(
             status_code=400,
             detail=(
-                "No readable text was found. Try a text-based PDF "
-                "or DOCX. Scanned image-only PDFs are not supported."
+                "No readable text was found. Try a text-based PDF or DOCX. "
+                "Scanned image-only PDFs are not supported."
             ),
         )
 
